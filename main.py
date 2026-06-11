@@ -11,25 +11,53 @@ st.set_page_config(
     layout="wide",
 )
 
+# ── THEME PALETTE (Dark Navy) ─────────────────────────────────────────────────
+BG_PAGE    = "#060d1f"   # 가장 깊은 네이비 (페이지 배경)
+BG_CARD    = "#0d1b38"   # 카드 배경
+BG_CARD2   = "#112044"   # 카드 그라데이션 끝
+BG_PLOT    = "#0a1628"   # 차트 내부
+BORDER     = "#1e3a6e"   # 테두리
+TEXT_DIM   = "#6b84b0"   # 흐린 텍스트
+TEXT_MAIN  = "#c8d8f0"   # 기본 텍스트
+ACCENT     = "#2563eb"   # 강조 (버튼 활성 등)
+
 # ── CSS ──────────────────────────────────────────────────────────────────────
-st.markdown("""
+st.markdown(f"""
 <style>
-    .main { background-color: #0f1117; }
-    .metric-card {
-        background: linear-gradient(135deg, #1e2130 0%, #252a3d 100%);
-        border: 1px solid #2d3250;
-        border-radius: 12px;
-        padding: 18px 22px;
+    /* 전체 페이지 배경 */
+    .stApp, .main, [data-testid="stAppViewContainer"] {{
+        background-color: {BG_PAGE} !important;
+    }}
+    [data-testid="stSidebar"] {{
+        background-color: #080f24 !important;
+        border-right: 1px solid {BORDER};
+    }}
+    /* 헤더 */
+    [data-testid="stHeader"] {{ background-color: {BG_PAGE} !important; }}
+
+    .metric-card {{
+        background: linear-gradient(135deg, {BG_CARD} 0%, {BG_CARD2} 100%);
+        border: 1px solid {BORDER};
+        border-radius: 14px;
+        padding: 20px 24px;
         text-align: center;
-    }
-    .metric-label { font-size: 13px; color: #8892b0; margin-bottom: 4px; }
-    .metric-value { font-size: 28px; font-weight: 700; margin-bottom: 2px; }
-    .metric-delta { font-size: 13px; }
-    .section-title {
-        font-size: 16px; font-weight: 600; color: #ccd6f6;
-        margin-bottom: 12px; padding-bottom: 6px;
-        border-bottom: 1px solid #2d3250;
-    }
+        box-shadow: 0 4px 24px rgba(6,13,31,0.6);
+    }}
+    .metric-label {{ font-size: 13px; color: {TEXT_DIM}; margin-bottom: 4px; letter-spacing: 0.03em; }}
+    .metric-value {{ font-size: 28px; font-weight: 700; margin-bottom: 2px; }}
+    .metric-delta {{ font-size: 13px; }}
+    .section-title {{
+        font-size: 15px; font-weight: 600; color: {TEXT_MAIN};
+        margin-bottom: 12px; padding-bottom: 8px;
+        border-bottom: 1px solid {BORDER};
+        letter-spacing: 0.02em;
+    }}
+    /* dataframe 배경 */
+    [data-testid="stDataFrame"] {{ background-color: {BG_CARD} !important; border-radius: 10px; }}
+    .stDataFrame thead tr th {{
+        background-color: #0d1b38 !important;
+        color: {TEXT_MAIN} !important;
+    }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -55,7 +83,7 @@ except FileNotFoundError:
 # ── HEADER ───────────────────────────────────────────────────────────────────
 st.markdown("## 💱 주요국 통화 대원화 환율 분석 대시보드")
 st.markdown(
-    "<p style='color:#8892b0;font-size:14px;margin-top:-8px;'>출처: ECOS (한국은행 경제통계시스템)</p>",
+    "<p style='color:#6b84b0;font-size:14px;margin-top:-8px;letter-spacing:0.02em;'>출처: ECOS (한국은행 경제통계시스템)</p>",
     unsafe_allow_html=True,
 )
 
@@ -111,20 +139,20 @@ if dff.empty:
 def kpi(series, label, unit):
     s = series.dropna()
     if s.empty:
-        return f"<div class='metric-card'><div class='metric-label'>{label}</div><div class='metric-value' style='color:#8892b0'>N/A</div></div>"
+        return f"<div class='metric-card'><div class='metric-label'>{label}</div><div class='metric-value' style='color:#6b84b0'>N/A</div></div>"
     latest = s.iloc[-1]
     prev = s.iloc[-2] if len(s) > 1 else latest
     delta = latest - prev
     pct = delta / prev * 100 if prev != 0 else 0
-    color = "#f87171" if delta > 0 else "#34d399" if delta < 0 else "#94a3b8"
+    color = "#f87171" if delta > 0 else "#4ade80" if delta < 0 else "#6b84b0"
     arrow = "▲" if delta > 0 else "▼" if delta < 0 else "—"
     period_min, period_max = s.min(), s.max()
     return f"""
     <div class='metric-card'>
         <div class='metric-label'>{label}</div>
-        <div class='metric-value' style='color:{color}'>{latest:,.2f}<span style='font-size:14px;color:#8892b0'> {unit}</span></div>
+        <div class='metric-value' style='color:{color}'>{latest:,.2f}<span style='font-size:14px;color:#6b84b0'> {unit}</span></div>
         <div class='metric-delta' style='color:{color}'>{arrow} {abs(delta):.2f} ({pct:+.2f}%)</div>
-        <div style='font-size:11px;color:#64748b;margin-top:6px'>
+        <div style='font-size:11px;color:#3d5a8a;margin-top:6px'>
             기간 최저: {period_min:,.2f} &nbsp;|&nbsp; 기간 최고: {period_max:,.2f}
         </div>
     </div>"""
@@ -140,7 +168,7 @@ with c3:
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ── COLORS & MA ───────────────────────────────────────────────────────────────
-COLORS = {"usd": "#60a5fa", "jpy100": "#f59e0b", "cny": "#34d399"}
+COLORS = {"usd": "#38bdf8", "jpy100": "#fb923c", "cny": "#a78bfa"}
 LABELS = {"usd": "원/달러", "jpy100": "원/100엔", "cny": "원/위안"}
 
 for col in ["usd", "jpy100", "cny"]:
@@ -168,7 +196,7 @@ def add_series(col, secondary):
                 x=s2.index, open=s2["open"], high=s2["high"],
                 low=s2["low"], close=s2["close"],
                 name="원/달러 (OHLC)",
-                increasing_line_color="#34d399",
+                increasing_line_color="#4ade80",
                 decreasing_line_color="#f87171",
             ),
             secondary_y=secondary,
@@ -208,19 +236,23 @@ if show_cny:
 fig.update_layout(
     template="plotly_dark",
     paper_bgcolor="rgba(0,0,0,0)",
-    plot_bgcolor="rgba(15,17,23,0.8)",
+    plot_bgcolor="#0a1628",
     hovermode="x unified",
     legend=dict(
         orientation="h", yanchor="bottom", y=1.02,
         xanchor="right", x=1,
-        bgcolor="rgba(30,33,48,0.8)",
-        bordercolor="#2d3250", borderwidth=1,
+        bgcolor="rgba(13,27,56,0.9)",
+        bordercolor="#1e3a6e", borderwidth=1,
+        font=dict(color="#c8d8f0"),
     ),
     margin=dict(l=10, r=10, t=40, b=40),
     height=520,
+    font=dict(color="#c8d8f0"),
     xaxis=dict(
-        showgrid=True, gridcolor="#1e2130", gridwidth=0.5,
-        rangeslider=dict(visible=show_range, thickness=0.05),
+        showgrid=True, gridcolor="#0f2347", gridwidth=0.5,
+        linecolor="#1e3a6e",
+        tickfont=dict(color="#6b84b0"),
+        rangeslider=dict(visible=show_range, thickness=0.05, bgcolor="#0d1b38"),
         rangeselector=dict(
             buttons=[
                 dict(count=1, label="1개월", step="month", stepmode="backward"),
@@ -230,19 +262,24 @@ fig.update_layout(
                 dict(count=3, label="3년", step="year", stepmode="backward"),
                 dict(step="all", label="전체"),
             ],
-            bgcolor="#1e2130",
-            activecolor="#3b4fd8",
-            bordercolor="#2d3250",
-            font=dict(color="#ccd6f6", size=11),
+            bgcolor="#0d1b38",
+            activecolor="#2563eb",
+            bordercolor="#1e3a6e",
+            font=dict(color="#c8d8f0", size=11),
             y=1.05,
         ),
         type="date",
     ),
-    yaxis=dict(showgrid=True, gridcolor="#1e2130", gridwidth=0.5, ticksuffix=" 원", title="원/달러, 원/100엔"),
+    yaxis=dict(
+        showgrid=True, gridcolor="#0f2347", gridwidth=0.5,
+        ticksuffix=" 원", title="원/달러, 원/100엔",
+        linecolor="#1e3a6e", tickfont=dict(color="#6b84b0"),
+    ),
 )
 
 if has_dual_axis:
-    fig.update_yaxes(title_text="원/위안", ticksuffix=" 원", secondary_y=True, showgrid=False)
+    fig.update_yaxes(title_text="원/위안", ticksuffix=" 원", secondary_y=True, showgrid=False,
+                     linecolor="#1e3a6e", tickfont=dict(color="#6b84b0"))
 
 st.plotly_chart(fig, use_container_width=True)
 
@@ -298,13 +335,16 @@ for col, label in LABELS.items():
 fig_vol.update_layout(
     template="plotly_dark",
     paper_bgcolor="rgba(0,0,0,0)",
-    plot_bgcolor="rgba(15,17,23,0.8)",
+    plot_bgcolor="#0a1628",
     hovermode="x unified",
     height=300,
     margin=dict(l=10, r=10, t=20, b=30),
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-    xaxis=dict(showgrid=True, gridcolor="#1e2130"),
-    yaxis=dict(showgrid=True, gridcolor="#1e2130", title="표준편차 (원)"),
+    font=dict(color="#c8d8f0"),
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                bgcolor="rgba(13,27,56,0.9)", bordercolor="#1e3a6e", borderwidth=1),
+    xaxis=dict(showgrid=True, gridcolor="#0f2347", linecolor="#1e3a6e", tickfont=dict(color="#6b84b0")),
+    yaxis=dict(showgrid=True, gridcolor="#0f2347", title="표준편차 (원)",
+               linecolor="#1e3a6e", tickfont=dict(color="#6b84b0")),
 )
 st.plotly_chart(fig_vol, use_container_width=True)
 
@@ -335,16 +375,17 @@ if len(available_cols) >= 2:
         fig_corr.update_layout(
             template="plotly_dark",
             paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(15,17,23,0.8)",
+            plot_bgcolor="#0a1628",
             height=280,
             margin=dict(l=10, r=10, t=20, b=20),
+            font=dict(color="#c8d8f0"),
         )
         st.plotly_chart(fig_corr, use_container_width=True)
 
 # ── FOOTER ────────────────────────────────────────────────────────────────────
 st.markdown("---")
 st.markdown(
-    "<p style='text-align:center;color:#4a5568;font-size:12px;'>"
+    "<p style='text-align:center;color:#2d4a7a;font-size:12px;'>"
     "데이터 출처: 한국은행 ECOS | 원/달러(서울외국환시장 종가), 원/100엔(하나은행 15:30 고시), 원/위안(서울외국환시장 종가)"
     "</p>",
     unsafe_allow_html=True,
