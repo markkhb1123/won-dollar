@@ -11,7 +11,6 @@ st.title("💱 원화 환율 분석 웹앱")
 st.markdown("**원/달러, 원/100엔, 원/위안** 환율의 변동 추이를 한눈에 분석합니다.")
 
 # ===================== 환율 정보 정의 =====================
-# yfinance JPYKRW는 '1엔당 원화'라서 100을 곱해 '100엔당 원화'로 변환
 currency_info = {
     "원/달러 (USD)": {"ticker": "USDKRW=X", "multiplier": 1,   "color": "#1f77b4"},
     "원/100엔 (JPY)": {"ticker": "JPYKRW=X", "multiplier": 100, "color": "#d62728"},
@@ -22,7 +21,6 @@ currency_info = {
 st.sidebar.header("⚙️ 분석 설정")
 
 st.sidebar.subheader("📅 분석 기간")
-# 빠른 기간 선택 버튼
 quick = st.sidebar.radio(
     "빠른 선택",
     ["최근 1개월", "최근 3개월", "최근 6개월", "최근 1년", "직접 선택"],
@@ -41,7 +39,6 @@ elif quick == "최근 1년":
 else:
     start_default = today - timedelta(days=180)
 
-# 직접 선택 시에만 날짜 입력 활성화
 if quick == "직접 선택":
     start_date = st.sidebar.date_input("시작 날짜", value=start_default)
     end_date = st.sidebar.date_input("종료 날짜", value=today)
@@ -49,7 +46,6 @@ else:
     start_date = start_default
     end_date = today
 
-# 이동평균선 설정
 st.sidebar.subheader("📈 이동평균선")
 show_ma = st.sidebar.checkbox("이동평균선 표시", value=True)
 ma_days = st.sidebar.slider("이동평균 기간 (일)", 5, 60, 20)
@@ -58,26 +54,47 @@ if start_date >= end_date:
     st.sidebar.error("⚠️ 시작 날짜가 종료 날짜보다 빠르거나 같아야 합니다.")
     st.stop()
 
-# ===================== 데이터 불러오기 =====================
-@st.cache_data(ttl=3600)  # 1시간 동안 캐싱
+# ===================== 데이터 불러오기 (오류 수정 부분) =====================
+@st.cache_data(ttl=3600)
 def load_data(ticker, start, end, multiplier):
     df = yf.download(ticker, start=start, end=end, progress=False)
-    if not df.empty:
-        df["Close"] = df["Close"] * multiplier
-    return df
+
+    if df.empty:
+        return pd.Series(dtype="float64")
+
+    # ▼▼▼ 핵심 수정: MultiIndex 컬럼 안전 처리 ▼▼▼
+    # 최신 yfinance는 컬럼이 ('Close', 'USDKRW=X') 형태일 수 있음
+    if isinstance(df.columns, pd.MultiIndex):
+        # 'Close' 레벨만 선택
+        close = df["Close"]
+        # close가 DataFrame이면 첫 번째 열을 Series로 변환
+        if isinstance(close, pd.DataFrame):
+            close = close.iloc[:, 0]
+    else:
+        close = df["Close"]
+    # ▲▲▲ 여기까지 ▲▲▲
+
+    close = close * multiplier
+    return close.dropna()
 
 all_data = {}
 with st.spinner("환율 데이터를 불러오는 중..."):
     for name, info in currency_info.items():
-        df = load_data(info["ticker"], start_date, end_date, info["multiplier"])
-        if not df.empty:
-            all_data[name] = df["Close"]
+        series = load_data(info["ticker"], start_date, end_date, info["multiplier"])
+        if not series.empty:
+            all_data[name] = series
 
 if not all_data:
     st.error("데이터를 불러오지 못했습니다. 기간을 바꾸거나 잠시 후 다시 시도하세요.")
     st.stop()
 
-combined = pd.DataFrame(all_data).dropna()
+# 여러 Series를 날짜 기준으로 합치기 (axis=1: 열 방향)
+combined = pd.concat(all_data, axis=1).dropna()
+
+# 데이터가 2개 미만이면 전일 대비 계산 불가
+if len(combined) < 2:
+    st.error("선택한 기간의 데이터가 너무 적습니다. 기간을 더 넓혀주세요.")
+    st.stop()
 
 # ===================== 상단 요약 카드 =====================
 st.subheader("📌 현재 환율 요약")
@@ -105,19 +122,16 @@ with tab1:
     series = combined[selected].dropna()
     color = currency_info[selected]["color"]
 
-    # 통계 요약
     s1, s2, s3, s4 = st.columns(4)
     s1.metric("최고가", f"{float(series.max()):,.2f} 원")
     s2.metric("최저가", f"{float(series.min()):,.2f} 원")
     s3.metric("평균", f"{float(series.mean()):,.2f} 원")
     s4.metric("데이터 수", f"{len(series)} 일")
 
-    # 추세 그래프
     st.subheader(f"{selected} 추세 그래프")
     fig1, ax1 = plt.subplots(figsize=(11, 4.5))
     ax1.plot(series.index, series.values, color=color, linewidth=2, label="환율")
 
-    # 이동평균선 추가
     if show_ma:
         ma = series.rolling(ma_days).mean()
         ax1.plot(ma.index, ma.values, color="orange", linewidth=2,
@@ -147,7 +161,6 @@ with tab2:
     ax2.grid(True, alpha=0.3)
     st.pyplot(fig2)
 
-    # 변동률 요약 표
     st.subheader("📋 기간 변동률 요약")
     summary = pd.DataFrame({
         "시작 환율": combined.iloc[0].round(2),
