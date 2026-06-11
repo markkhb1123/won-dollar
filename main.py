@@ -290,7 +290,7 @@ for col, label in LABELS.items():
             name=label,
             line=dict(color=COLORS[col], width=1.5),
             fill="tozeroy",
-            fillcolor=COLORS[col].replace(")", ", 0.07)").replace("rgb(", "rgba(").replace("#", ""),
+            fillcolor=f"rgba({int(COLORS[col][1:3],16)}, {int(COLORS[col][3:5],16)}, {int(COLORS[col][5:7],16)}, 0.07)",
             hovertemplate=f"<b>{label} 변동성</b><br>날짜: %{{x|%Y-%m-%d}}<br>표준편차: %{{y:.2f}}<extra></extra>",
         )
     )
