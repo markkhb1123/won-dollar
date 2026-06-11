@@ -1,275 +1,351 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import numpy as np
 from datetime import datetime, timedelta
 
-# ===================== 페이지 기본 설정 =====================
-st.set_page_config(page_title="환율 분석 웹앱", page_icon="💱", layout="wide")
-
-st.title("💱 원화 환율 분석 웹앱")
-st.markdown("**원/달러, 원/100엔, 원/위안** 환율의 변동 추이를 한눈에 분석합니다.")
-
-# ===================== 환율 정보 정의 =====================
-CURRENCY_INFO = {
-    "원/달러 (USD)": {"ticker": "USDKRW=X", "multiplier": 1,   "color": "#1f77b4"},
-    "원/100엔 (JPY)": {"ticker": "JPYKRW=X", "multiplier": 100, "color": "#d62728"},
-    "원/위안 (CNY)": {"ticker": "CNYKRW=X", "multiplier": 1,   "color": "#2ca02c"},
-}
-
-
-# ===================== 단일 통화 로드 =====================
-@st.cache_data(ttl=3600)
-def load_one(ticker, start, end, multiplier):
-    """
-    단일 통화의 종가 Series를 반환.
-    - MultiIndex 컬럼 안전 처리
-    - 날짜 인덱스에서 시간/타임존 제거(정규화)
-    """
-    try:
-        df = yf.download(
-            ticker, start=start, end=end,
-            progress=False, auto_adjust=True,
-        )
-    except Exception as e:
-        return pd.Series(dtype="float64"), f"다운로드 오류: {e}"
-
-    if df is None or df.empty:
-        return pd.Series(dtype="float64"), "데이터 없음"
-
-    # 'Close' 컬럼 추출 (MultiIndex 대응)
-    try:
-        if isinstance(df.columns, pd.MultiIndex):
-            close = df["Close"]
-            if isinstance(close, pd.DataFrame):
-                close = close.iloc[:, 0]
-        else:
-            close = df["Close"]
-    except Exception as e:
-        return pd.Series(dtype="float64"), f"컬럼 처리 오류: {e}"
-
-    close = close.dropna()
-    if close.empty:
-        return pd.Series(dtype="float64"), "유효값 없음"
-
-    # ▼ 핵심: 날짜 인덱스 정규화 (타임존 제거 + 시간 제거)
-    idx = pd.to_datetime(close.index)
-    if idx.tz is not None:
-        idx = idx.tz_localize(None)
-    close.index = idx.normalize()  # 시:분:초를 00:00:00으로 통일
-
-    # 같은 날짜 중복 제거(마지막 값 사용)
-    close = close[~close.index.duplicated(keep="last")]
-
-    close = close * multiplier
-    return close, "성공"
-
-
-# ===================== 전체 통화 로드 & 결합 =====================
-@st.cache_data(ttl=3600)
-def load_all(start, end):
-    data = {}
-    logs = {}
-    for name, info in CURRENCY_INFO.items():
-        s, msg = load_one(info["ticker"], start, end, info["multiplier"])
-        logs[name] = (len(s), msg)
-        if not s.empty:
-            data[name] = s
-
-    if not data:
-        return pd.DataFrame(), logs
-
-    # ▼ 핵심: dropna 대신 outer join 후 ffill/bfill 로 휴장일 메움
-    combined = pd.concat(data, axis=1)
-    combined = combined.sort_index()
-    combined = combined.ffill().bfill()   # 앞→뒤 순서로 빈칸 채움
-    combined = combined.dropna(how="any") # 그래도 남은 완전 결측 행만 제거
-
-    return combined, logs
-
-
-# ===================== 사이드바: 설정 =====================
-st.sidebar.header("⚙️ 분석 설정")
-st.sidebar.subheader("📅 분석 기간")
-
-quick = st.sidebar.radio(
-    "빠른 선택",
-    ["최근 1개월", "최근 3개월", "최근 6개월", "최근 1년", "직접 선택"],
-    index=2,
+st.set_page_config(
+    page_title="주요국 통화 대원화 환율 분석",
+    page_icon="💱",
+    layout="wide",
 )
 
-today = datetime.today().date()
-period_map = {"최근 1개월": 30, "최근 3개월": 90, "최근 6개월": 180, "최근 1년": 365}
+# ── CSS ──────────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+    .main { background-color: #0f1117; }
+    .metric-card {
+        background: linear-gradient(135deg, #1e2130 0%, #252a3d 100%);
+        border: 1px solid #2d3250;
+        border-radius: 12px;
+        padding: 18px 22px;
+        text-align: center;
+    }
+    .metric-label { font-size: 13px; color: #8892b0; margin-bottom: 4px; }
+    .metric-value { font-size: 28px; font-weight: 700; margin-bottom: 2px; }
+    .metric-delta { font-size: 13px; }
+    .section-title {
+        font-size: 16px; font-weight: 600; color: #ccd6f6;
+        margin-bottom: 12px; padding-bottom: 6px;
+        border-bottom: 1px solid #2d3250;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-if quick == "직접 선택":
-    start_date = st.sidebar.date_input("시작 날짜", value=today - timedelta(days=180))
-    end_date = st.sidebar.date_input("종료 날짜", value=today)
-    if isinstance(start_date, tuple):
-        start_date = start_date[0]
-    if isinstance(end_date, tuple):
-        end_date = end_date[0]
-else:
-    start_date = today - timedelta(days=period_map[quick])
-    end_date = today
-
-st.sidebar.subheader("📈 이동평균선")
-show_ma = st.sidebar.checkbox("이동평균선 표시", value=True)
-ma_days = st.sidebar.slider("이동평균 기간 (일)", 5, 60, 20)
-
-# yfinance는 end 날짜를 포함하지 않으므로 하루 더해줌
-end_query = end_date + timedelta(days=1)
-
-if start_date >= end_date:
-    st.sidebar.error("⚠️ 시작 날짜가 종료 날짜보다 빨라야 합니다.")
-    st.stop()
-
-# ===================== 데이터 불러오기 =====================
-with st.spinner("환율 데이터를 불러오는 중... (잠시만요)"):
-    combined, logs = load_all(start_date, end_query)
-
-# ▼ 디버그: 각 통화가 몇 개 로드됐는지 표시 (문제 추적용)
-with st.expander("🔧 데이터 로드 상태 확인 (디버그)"):
-    for name, (cnt, msg) in logs.items():
-        st.write(f"- **{name}** : {cnt}개 / 상태: {msg}")
-    if not combined.empty:
-        st.write(f"➡️ 최종 결합 데이터: **{len(combined)}일 × {len(combined.columns)}개 통화**")
-        st.write("포함된 통화:", list(combined.columns))
-
-if combined.empty:
-    st.error("데이터를 불러오지 못했습니다. 기간을 바꾸거나 잠시 후 다시 시도하세요.")
-    st.stop()
-
-if len(combined) < 2:
-    st.error("선택한 기간의 데이터가 너무 적습니다. 기간을 더 넓혀주세요.")
-    st.stop()
-
-# 누락된 통화 경고
-missing = [n for n in CURRENCY_INFO if n not in combined.columns]
-if missing:
-    st.warning(f"⚠️ 다음 통화가 표시되지 않습니다: {', '.join(missing)} "
-               f"(데이터 제공처 일시적 문제일 수 있어요. 기간을 바꿔보세요.)")
-
-if show_ma and ma_days > len(combined):
-    st.info(f"ℹ️ 이동평균 기간({ma_days}일)이 데이터 수({len(combined)}일)보다 큽니다.")
-
-# ===================== 상단 요약 카드 =====================
-st.subheader("📌 현재 환율 요약")
-cols = st.columns(len(combined.columns))
-for i, name in enumerate(combined.columns):
-    s = combined[name]
-    latest, prev = float(s.iloc[-1]), float(s.iloc[-2])
-    change = latest - prev
-    change_pct = (change / prev) * 100 if prev != 0 else 0
-    cols[i].metric(name, f"{latest:,.2f} 원",
-                   f"{change:+,.2f} 원 ({change_pct:+.2f}%)")
-
-st.divider()
-
-# ===================== 탭 구성 =====================
-tab1, tab2, tab3 = st.tabs(["📈 개별 환율 분석", "🔍 세 환율 비교", "📊 변동성 분석"])
-
-# ----- 탭 1: 개별 -----
-with tab1:
-    selected = st.selectbox("분석할 환율 선택", list(combined.columns))
-    s = combined[selected].dropna()
-    color = CURRENCY_INFO[selected]["color"]
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("최고가", f"{float(s.max()):,.2f} 원")
-    c2.metric("최저가", f"{float(s.min()):,.2f} 원")
-    c3.metric("평균", f"{float(s.mean()):,.2f} 원")
-    c4.metric("데이터 수", f"{len(s)} 일")
-
-    st.subheader(f"{selected} 추세 그래프")
-    fig1 = go.Figure()
-    fig1.add_trace(go.Scatter(
-        x=s.index, y=s.values, mode="lines", name="환율",
-        line=dict(color=color, width=2),
-        hovertemplate="날짜: %{x|%Y-%m-%d}<br>환율: %{y:,.2f} 원<extra></extra>",
-    ))
-    if show_ma:
-        ma = s.rolling(ma_days).mean()
-        fig1.add_trace(go.Scatter(
-            x=ma.index, y=ma.values, mode="lines", name=f"{ma_days}일 이동평균",
-            line=dict(color="orange", width=2, dash="dash"),
-            hovertemplate="날짜: %{x|%Y-%m-%d}<br>이동평균: %{y:,.2f} 원<extra></extra>",
-        ))
-    fig1.update_layout(
-        xaxis_title="날짜", yaxis_title="환율 (원)",
-        hovermode="x unified", height=500,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        xaxis=dict(rangeslider=dict(visible=True)),
+# ── DATA ─────────────────────────────────────────────────────────────────────
+@st.cache_data
+def load_data():
+    df = pd.read_excel(
+        "주요국_통화의_대원화_환율.xlsx",
+        header=None,
+        skiprows=7,
     )
-    st.plotly_chart(fig1, use_container_width=True)
+    df.columns = ["date", "usd", "jpy100", "cny"]
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
+    return df
 
-# ----- 탭 2: 비교 -----
-with tab2:
-    mode = st.radio("비교 방식", ["변동률(%) 기준", "절대값(원) 기준"], horizontal=True)
+try:
+    df = load_data()
+except FileNotFoundError:
+    st.error("❌ 데이터 파일(주요국_통화의_대원화_환율.xlsx)을 찾을 수 없습니다. 앱과 같은 폴더에 파일을 놓아주세요.")
+    st.stop()
 
-    fig2 = go.Figure()
-    if mode == "변동률(%) 기준":
-        st.caption("단위가 달라 '시작일 = 0%' 기준 변동률로 비교합니다.")
-        plot_df = (combined / combined.iloc[0] - 1) * 100
-        ytitle, yfmt = "변동률 (%)", "%{y:+.2f}%"
+# ── HEADER ───────────────────────────────────────────────────────────────────
+st.markdown("## 💱 주요국 통화 대원화 환율 분석 대시보드")
+st.markdown(
+    "<p style='color:#8892b0;font-size:14px;margin-top:-8px;'>출처: ECOS (한국은행 경제통계시스템)</p>",
+    unsafe_allow_html=True,
+)
+
+# ── SIDEBAR ──────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("### ⚙️ 분석 옵션")
+
+    min_date = df["date"].min().date()
+    max_date = df["date"].max().date()
+
+    PRESETS = {
+        "전체 기간": (min_date, max_date),
+        "최근 1년": (max_date - timedelta(days=365), max_date),
+        "최근 3년": (max_date - timedelta(days=365 * 3), max_date),
+        "최근 5년": (max_date - timedelta(days=365 * 5), max_date),
+        "최근 10년": (max_date - timedelta(days=365 * 10), max_date),
+        "직접 선택": None,
+    }
+
+    preset = st.selectbox("📅 기간 프리셋", list(PRESETS.keys()), index=1)
+
+    if PRESETS[preset]:
+        start_date, end_date = PRESETS[preset]
+        start_date = max(start_date, min_date)
     else:
-        st.caption("실제 원화 금액으로 비교합니다.")
-        plot_df = combined
-        ytitle, yfmt = "환율 (원)", "%{y:,.2f} 원"
+        col_s, col_e = st.columns(2)
+        with col_s:
+            start_date = st.date_input("시작일", value=max_date - timedelta(days=365), min_value=min_date, max_value=max_date)
+        with col_e:
+            end_date = st.date_input("종료일", value=max_date, min_value=min_date, max_value=max_date)
 
-    for name in plot_df.columns:
-        fig2.add_trace(go.Scatter(
-            x=plot_df.index, y=plot_df[name], mode="lines", name=name,
-            line=dict(color=CURRENCY_INFO[name]["color"], width=2),
-            hovertemplate="날짜: %{x|%Y-%m-%d}<br>" + name + ": " + yfmt + "<extra></extra>",
-        ))
-    if mode == "변동률(%) 기준":
-        fig2.add_hline(y=0, line_dash="dash", line_color="gray")
-    fig2.update_layout(
-        xaxis_title="날짜", yaxis_title=ytitle,
-        hovermode="x unified", height=520,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-    )
-    st.plotly_chart(fig2, use_container_width=True)
+    st.markdown("---")
+    st.markdown("### 📊 통화 선택")
+    show_usd = st.checkbox("원/달러 (USD)", value=True)
+    show_jpy = st.checkbox("원/100엔 (JPY)", value=True)
+    show_cny = st.checkbox("원/위안 (CNY)", value=True)
 
-    st.subheader("📋 기간 변동률 요약")
-    norm = (combined / combined.iloc[0] - 1) * 100
-    summary = pd.DataFrame({
-        "시작 환율": combined.iloc[0].round(2),
-        "종료 환율": combined.iloc[-1].round(2),
-        "변동률(%)": norm.iloc[-1].round(2),
+    st.markdown("---")
+    st.markdown("### 🔧 차트 옵션")
+    ma_period = st.select_slider("이동평균선 (일)", options=[0, 5, 20, 60, 120], value=20)
+    show_range = st.checkbox("범위 선택 슬라이더 표시", value=True)
+    chart_type = st.radio("차트 유형", ["라인 차트", "캔들스틱 (달러만)"], index=0)
+
+# ── FILTER ───────────────────────────────────────────────────────────────────
+mask = (df["date"].dt.date >= start_date) & (df["date"].dt.date <= end_date)
+dff = df[mask].copy()
+
+if dff.empty:
+    st.warning("선택한 기간에 데이터가 없습니다.")
+    st.stop()
+
+# ── KPI CARDS ────────────────────────────────────────────────────────────────
+def kpi(series, label, unit):
+    s = series.dropna()
+    if s.empty:
+        return f"<div class='metric-card'><div class='metric-label'>{label}</div><div class='metric-value' style='color:#8892b0'>N/A</div></div>"
+    latest = s.iloc[-1]
+    prev = s.iloc[-2] if len(s) > 1 else latest
+    delta = latest - prev
+    pct = delta / prev * 100 if prev != 0 else 0
+    color = "#f87171" if delta > 0 else "#34d399" if delta < 0 else "#94a3b8"
+    arrow = "▲" if delta > 0 else "▼" if delta < 0 else "—"
+    period_min, period_max = s.min(), s.max()
+    return f"""
+    <div class='metric-card'>
+        <div class='metric-label'>{label}</div>
+        <div class='metric-value' style='color:{color}'>{latest:,.2f}<span style='font-size:14px;color:#8892b0'> {unit}</span></div>
+        <div class='metric-delta' style='color:{color}'>{arrow} {abs(delta):.2f} ({pct:+.2f}%)</div>
+        <div style='font-size:11px;color:#64748b;margin-top:6px'>
+            기간 최저: {period_min:,.2f} &nbsp;|&nbsp; 기간 최고: {period_max:,.2f}
+        </div>
+    </div>"""
+
+c1, c2, c3 = st.columns(3)
+with c1:
+    st.markdown(kpi(dff["usd"], "🇺🇸 원/달러", "원"), unsafe_allow_html=True)
+with c2:
+    st.markdown(kpi(dff["jpy100"], "🇯🇵 원/100엔", "원"), unsafe_allow_html=True)
+with c3:
+    st.markdown(kpi(dff["cny"], "🇨🇳 원/위안", "원"), unsafe_allow_html=True)
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# ── COLORS & MA ───────────────────────────────────────────────────────────────
+COLORS = {"usd": "#60a5fa", "jpy100": "#f59e0b", "cny": "#34d399"}
+LABELS = {"usd": "원/달러", "jpy100": "원/100엔", "cny": "원/위안"}
+
+for col in ["usd", "jpy100", "cny"]:
+    if ma_period > 0:
+        dff[f"{col}_ma"] = dff[col].rolling(ma_period, min_periods=1).mean()
+
+
+# ── MAIN CHART ────────────────────────────────────────────────────────────────
+st.markdown("<div class='section-title'>📈 환율 변동 추이</div>", unsafe_allow_html=True)
+
+has_dual_axis = show_cny and (show_usd or show_jpy)
+specs = [[{"secondary_y": True}]] if has_dual_axis else [[{"secondary_y": False}]]
+fig = make_subplots(specs=specs)
+
+def add_series(col, secondary):
+    if dff[col].dropna().empty:
+        return
+    s = dff[["date", col]].dropna()
+
+    if chart_type == "캔들스틱 (달러만)" and col == "usd":
+        # Weekly OHLC
+        s2 = s.set_index("date")["usd"].resample("W").ohlc().dropna()
+        fig.add_trace(
+            go.Candlestick(
+                x=s2.index, open=s2["open"], high=s2["high"],
+                low=s2["low"], close=s2["close"],
+                name="원/달러 (OHLC)",
+                increasing_line_color="#34d399",
+                decreasing_line_color="#f87171",
+            ),
+            secondary_y=secondary,
+        )
+    else:
+        fig.add_trace(
+            go.Scatter(
+                x=s["date"], y=s[col],
+                name=LABELS[col],
+                line=dict(color=COLORS[col], width=1.8),
+                hovertemplate=f"<b>{LABELS[col]}</b><br>날짜: %{{x|%Y-%m-%d}}<br>환율: %{{y:,.2f}} 원<extra></extra>",
+                mode="lines",
+            ),
+            secondary_y=secondary,
+        )
+
+    if ma_period > 0 and f"{col}_ma" in dff.columns:
+        ms = dff[["date", f"{col}_ma"]].dropna()
+        fig.add_trace(
+            go.Scatter(
+                x=ms["date"], y=ms[f"{col}_ma"],
+                name=f"{LABELS[col]} {ma_period}일 MA",
+                line=dict(color=COLORS[col], width=1, dash="dot"),
+                opacity=0.7,
+                hovertemplate=f"<b>{LABELS[col]} {ma_period}일 MA</b><br>날짜: %{{x|%Y-%m-%d}}<br>환율: %{{y:,.2f}} 원<extra></extra>",
+            ),
+            secondary_y=secondary,
+        )
+
+if show_usd:
+    add_series("usd", False)
+if show_jpy:
+    add_series("jpy100", False)
+if show_cny:
+    add_series("cny", True if has_dual_axis else False)
+
+fig.update_layout(
+    template="plotly_dark",
+    paper_bgcolor="rgba(0,0,0,0)",
+    plot_bgcolor="rgba(15,17,23,0.8)",
+    hovermode="x unified",
+    legend=dict(
+        orientation="h", yanchor="bottom", y=1.02,
+        xanchor="right", x=1,
+        bgcolor="rgba(30,33,48,0.8)",
+        bordercolor="#2d3250", borderwidth=1,
+    ),
+    margin=dict(l=10, r=10, t=40, b=40),
+    height=520,
+    xaxis=dict(
+        showgrid=True, gridcolor="#1e2130", gridwidth=0.5,
+        rangeslider=dict(visible=show_range, thickness=0.05),
+        rangeselector=dict(
+            buttons=[
+                dict(count=1, label="1개월", step="month", stepmode="backward"),
+                dict(count=3, label="3개월", step="month", stepmode="backward"),
+                dict(count=6, label="6개월", step="month", stepmode="backward"),
+                dict(count=1, label="1년", step="year", stepmode="backward"),
+                dict(count=3, label="3년", step="year", stepmode="backward"),
+                dict(step="all", label="전체"),
+            ],
+            bgcolor="#1e2130",
+            activecolor="#3b4fd8",
+            bordercolor="#2d3250",
+            font=dict(color="#ccd6f6", size=11),
+            y=1.05,
+        ),
+        type="date",
+    ),
+    yaxis=dict(showgrid=True, gridcolor="#1e2130", gridwidth=0.5, ticksuffix=" 원", title="원/달러, 원/100엔"),
+)
+
+if has_dual_axis:
+    fig.update_yaxes(title_text="원/위안", ticksuffix=" 원", secondary_y=True, showgrid=False)
+
+st.plotly_chart(fig, use_container_width=True)
+
+# ── STATS TABLE ───────────────────────────────────────────────────────────────
+st.markdown("<div class='section-title'>📊 기간 통계 요약</div>", unsafe_allow_html=True)
+
+rows = []
+for col, label in LABELS.items():
+    s = dff[col].dropna()
+    if s.empty:
+        continue
+    first, last = s.iloc[0], s.iloc[-1]
+    change = last - first
+    pct_change = change / first * 100 if first != 0 else 0
+    rows.append({
+        "통화": label,
+        "시작 환율": f"{first:,.2f}",
+        "현재 환율": f"{last:,.2f}",
+        "변동폭": f"{change:+,.2f}",
+        "변동률": f"{pct_change:+.2f}%",
+        "최저": f"{s.min():,.2f}",
+        "최고": f"{s.max():,.2f}",
+        "평균": f"{s.mean():,.2f}",
+        "표준편차": f"{s.std():,.2f}",
     })
-    st.dataframe(summary, use_container_width=True)
 
-# ----- 탭 3: 변동성 -----
-with tab3:
-    st.subheader("📊 환율 변동성(불안정성) 분석")
-    st.caption("일일 수익률의 표준편차로 측정합니다. 클수록 변동이 심한 통화예요.")
+st.dataframe(
+    pd.DataFrame(rows).set_index("통화"),
+    use_container_width=True,
+)
 
-    daily_returns = combined.pct_change().dropna() * 100
-    volatility = daily_returns.std()
+# ── VOLATILITY CHART ──────────────────────────────────────────────────────────
+st.markdown("<br>", unsafe_allow_html=True)
+st.markdown("<div class='section-title'>📉 변동성 분석 (30일 롤링 표준편차)</div>", unsafe_allow_html=True)
 
-    vcols = st.columns(len(volatility))
-    for i, name in enumerate(volatility.index):
-        vcols[i].metric(f"{name} 변동성", f"{volatility[name]:.3f} %")
+fig_vol = go.Figure()
+for col, label in LABELS.items():
+    s = dff[["date", col]].dropna()
+    if s.empty:
+        continue
+    vol = s.set_index("date")[col].rolling(30).std()
+    fig_vol.add_trace(
+        go.Scatter(
+            x=vol.index, y=vol.values,
+            name=label,
+            line=dict(color=COLORS[col], width=1.5),
+            fill="tozeroy",
+            fillcolor=COLORS[col].replace(")", ", 0.07)").replace("rgb(", "rgba(").replace("#", ""),
+            hovertemplate=f"<b>{label} 변동성</b><br>날짜: %{{x|%Y-%m-%d}}<br>표준편차: %{{y:.2f}}<extra></extra>",
+        )
+    )
 
-    fig3 = go.Figure()
-    fig3.add_trace(go.Bar(
-        x=list(volatility.index), y=volatility.values,
-        marker_color=[CURRENCY_INFO[n]["color"] for n in volatility.index],
-        hovertemplate="%{x}<br>변동성: %{y:.3f}%<extra></extra>",
-    ))
-    fig3.update_layout(xaxis_title="통화",
-                       yaxis_title="일일 변동률 표준편차 (%)", height=400)
-    st.plotly_chart(fig3, use_container_width=True)
+fig_vol.update_layout(
+    template="plotly_dark",
+    paper_bgcolor="rgba(0,0,0,0)",
+    plot_bgcolor="rgba(15,17,23,0.8)",
+    hovermode="x unified",
+    height=300,
+    margin=dict(l=10, r=10, t=20, b=30),
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    xaxis=dict(showgrid=True, gridcolor="#1e2130"),
+    yaxis=dict(showgrid=True, gridcolor="#1e2130", title="표준편차 (원)"),
+)
+st.plotly_chart(fig_vol, use_container_width=True)
 
-    if not volatility.empty:
-        st.info(f"📌 선택 기간 동안 **가장 변동성이 큰 통화는 "
-                f"'{volatility.idxmax()}'** 입니다.")
+# ── CORRELATION ───────────────────────────────────────────────────────────────
+available_cols = {k: v for k, v in LABELS.items() if dff[k].dropna().shape[0] > 10}
+if len(available_cols) >= 2:
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>🔗 통화 간 상관관계</div>", unsafe_allow_html=True)
+    corr_df = dff[[c for c in available_cols]].dropna()
+    if not corr_df.empty:
+        corr = corr_df.corr()
+        labels_map = LABELS
+        corr.index = [labels_map[c] for c in corr.index]
+        corr.columns = [labels_map[c] for c in corr.columns]
 
-# ===================== 원본 데이터 =====================
-with st.expander("📋 전체 원본 데이터 보기 / 다운로드"):
-    st.dataframe(combined.sort_index(ascending=False), use_container_width=True)
-    csv = combined.to_csv().encode("utf-8-sig")
-    st.download_button("📥 CSV 다운로드", csv, "환율데이터.csv", "text/csv")
+        fig_corr = go.Figure(
+            go.Heatmap(
+                z=corr.values,
+                x=corr.columns.tolist(),
+                y=corr.index.tolist(),
+                colorscale="RdBu",
+                zmin=-1, zmax=1,
+                text=[[f"{v:.3f}" for v in row] for row in corr.values],
+                texttemplate="%{text}",
+                hovertemplate="<b>%{y} vs %{x}</b><br>상관계수: %{z:.4f}<extra></extra>",
+            )
+        )
+        fig_corr.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(15,17,23,0.8)",
+            height=280,
+            margin=dict(l=10, r=10, t=20, b=20),
+        )
+        st.plotly_chart(fig_corr, use_container_width=True)
 
-st.caption("데이터 출처: Yahoo Finance (yfinance) · 학습용 웹앱")
+# ── FOOTER ────────────────────────────────────────────────────────────────────
+st.markdown("---")
+st.markdown(
+    "<p style='text-align:center;color:#4a5568;font-size:12px;'>"
+    "데이터 출처: 한국은행 ECOS | 원/달러(서울외국환시장 종가), 원/100엔(하나은행 15:30 고시), 원/위안(서울외국환시장 종가)"
+    "</p>",
+    unsafe_allow_html=True,
+)
