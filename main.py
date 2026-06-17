@@ -390,3 +390,88 @@ st.markdown(
     "</p>",
     unsafe_allow_html=True,
 )
+# ==============================
+# 멀티페이지 환율 선택 기능 추가
+# ==============================
+
+st.sidebar.markdown("---")
+
+selected_page = st.sidebar.radio(
+    "📄 환율 페이지 선택",
+    [
+        "전체 대시보드",
+        "🇺🇸 미국 환율",
+        "🇯🇵 일본 환율",
+        "🇨🇳 중국 환율"
+    ]
+)
+
+
+# ------------------------------
+# 페이지별 표시 제어
+# ------------------------------
+
+if selected_page == "전체 대시보드":
+
+    show_usd = True
+    show_jpy = True
+    show_cny = True
+
+
+elif selected_page == "🇺🇸 미국 환율":
+
+    st.title("🇺🇸 미국 환율 분석")
+
+    show_usd = True
+    show_jpy = False
+    show_cny = False
+
+
+elif selected_page == "🇯🇵 일본 환율":
+
+    st.title("🇯🇵 일본 환율 분석")
+
+    show_usd = False
+    show_jpy = True
+    show_cny = False
+
+
+elif selected_page == "🇨🇳 중국 환율":
+
+    st.title("🇨🇳 중국 환율 분석")
+
+    show_usd = False
+    show_jpy = False
+    show_cny = True
+
+
+
+# ------------------------------
+# 기존 차트 출력 부분 교체
+# ------------------------------
+
+if show_usd:
+
+    st.subheader("🇺🇸 원/달러 환율")
+
+    st.line_chart(
+        dff["usd"]
+    )
+
+
+if show_jpy:
+
+    st.subheader("🇯🇵 원/100엔 환율")
+
+    st.line_chart(
+        dff["jpy100"]
+    )
+
+
+if show_cny:
+
+    st.subheader("🇨🇳 원/위안 환율")
+
+    st.line_chart(
+        dff["cny"]
+    )
